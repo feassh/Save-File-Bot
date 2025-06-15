@@ -29,6 +29,10 @@ os.makedirs('./sessions', exist_ok=True)
 
 bot = Client('./sessions/bot', api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
+# 用于记录每个消息的上传/下载进度时间与字节数
+last_update_time = {}
+last_update_bytes = {}
+
 
 def is_allowed_user(message: pyrogram.types.messages_and_media.message.Message):
     if str(message.from_user.id) in allowed_users:
@@ -36,6 +40,14 @@ def is_allowed_user(message: pyrogram.types.messages_and_media.message.Message):
 
     bot.send_message(message.chat.id, "鉴权失败", reply_to_message_id=message.id)
     return False
+
+
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['','K','M','G','T','P']:
+        if abs(num) < 1024.0:
+            return f"{num:.2f} {unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.2f} P{suffix}"
 
 
 # 下载状态函数
@@ -50,7 +62,7 @@ def downstatus(statusfile, message):
             txt = downread.read()
         try:
             bot.edit_message_text(message.chat.id, message.id, f"__正在下载__ : **{txt}**")
-            time.sleep(10)
+            time.sleep(3)
         except:
             time.sleep(5)
 
@@ -67,15 +79,36 @@ def upstatus(statusfile, message):
             txt = upread.read()
         try:
             bot.edit_message_text(message.chat.id, message.id, f"__正在上传__ : **{txt}**")
-            time.sleep(10)
+            time.sleep(3)
         except:
             time.sleep(5)
 
 
 # 进度写入函数
 def progress(current, total, message, type):
+    now = time.time()
+    key = f"{message.id}_{type}"
+
+    # 限制更新频率：每秒最多更新一次
+    if key in last_update_time and now - last_update_time[key] < 1:
+        return
+
+    if key in last_update_time:
+        elapsed = now - last_update_time[key]
+        diff = current - last_update_bytes[key]
+        speed = diff / elapsed if elapsed > 0 else 0
+        speed_str = sizeof_fmt(speed) + "/s"
+    else:
+        speed_str = "计算中..."
+
+    percent = current * 100 / total
+    status_text = f"{percent:.1f}% - {speed_str}"
+
     with open(f'{message.id}{type}status.txt', "w") as fileup:
-        fileup.write(f"{current * 100 / total:.1f}%")
+        fileup.write(status_text)
+
+    last_update_time[key] = now
+    last_update_bytes[key] = current
 
 
 # 开始命令处理函数
