@@ -17,3 +17,4 @@ services:
     volumes:
       - ./sessions:/app/sessions
     restart: "always"
+    network_mode: host
