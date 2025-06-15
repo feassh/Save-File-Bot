@@ -126,11 +126,11 @@ async def handle_private(event, msg=None):
     up_file = f"{msg_source.id}upstatus.txt"
     asyncio.create_task(watch_status(up_file, smsg, action="上传"))
 
-    caption = msg_source.message or ""
+    caption = ""  # msg_source.message or ""
 
     if msg_type == "Video":
         await bot.send_file(save_to_chat_id, file, caption=caption, video_note=False, reply_to=save_to_topic_id_video,
-                            spoiler=True, supports_streaming=True,
+                            spoiler=True,
                             progress_callback=progress_up_callback)
     elif msg_type == "Photo":
         await bot.send_file(save_to_chat_id, file, caption=caption, reply_to=save_to_topic_id_photo, spoiler=True,
