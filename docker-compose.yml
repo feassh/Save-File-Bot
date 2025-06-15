@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  save-file-bot:
+    container_name: save-file-bot
+    image: feassh/save-file-bot:latest
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TOKEN=
+      - ID=
+      - HASH=
+      - ALLOWED_USERS=
+      - SAVE_TO_CHAT_ID=
+      - SAVE_TO_TOPIC_ID_DOCUMENT=
+      - SAVE_TO_TOPIC_ID_VIDEO=
+      - SAVE_TO_TOPIC_ID_PHOTO=
+    volumes:
+      - ./sessions:/app/sessions
+    restart: "always"

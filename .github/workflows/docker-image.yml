@@ -1,21 +1,44 @@
-name: Save-File-Bot
+name: Docker
+
 on:
-  push:
-    branches: ["main"]
+  release:
+    types: [ created ] # 表示在创建新的 Release 时触发
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-and-push:
+    runs-on: ubuntu-latest  # job运行的基础环境
+
     steps:
-    - uses: actions/checkout@v4
-    - name: Get the date
-      id: date
-      run: echo "::set-output name=date::$(date +%s)"
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:${{ steps.date.outputs.date }}
-    - name: Save Docker image as tar file
-      run: docker save -o Save-File-Bot-Image.tar my-image-name:${{ steps.date.outputs.date }}
-    - name: Upload artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: docker-image
-        path: Save-File-Bot-Image.tar
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 设置 QEMU 以支持 ARM 模拟
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # 启用 Buildx（支持多架构构建）
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 登录 Docker Hub（如果需要推送）
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER_NAME }}
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v2  # 抽取项目信息，主要是镜像的tag
+        with:
+          images: feassh/save-file-bot
+
+      # 构建 ARM 版本的 Docker 镜像并推送
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64,linux/amd64  # 这里指定多架构支持
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

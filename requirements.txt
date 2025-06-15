@@ -1,3 +1,1 @@
-pyrogram
-tgcrypto
-flask
+Telethon~=1.40.0

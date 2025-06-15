@@ -1,0 +1,18 @@
+# 环境变量文件
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# Telethon session 文件
+*.session
+*.session-journal
+
+/.idea

@@ -2,5 +2,9 @@
     "TOKEN": "",
     "ID": "",
     "HASH": "",
-    "STRING": ""
+    "ALLOWED_USERS": "",
+    "SAVE_TO_CHAT_ID": "",
+    "SAVE_TO_TOPIC_ID_DOCUMENT": "",
+    "SAVE_TO_TOPIC_ID_VIDEO": "",
+    "SAVE_TO_TOPIC_ID_PHOTO": ""
 }
