@@ -1,1 +1,2 @@
-Telethon~=1.40.0
+Pyrogram~=2.0.106
+tgcrypto
