@@ -1,2 +1,4 @@
 Pyrogram~=2.0.106
 tgcrypto
+opencv-python~=4.11.0.86
+moviepy~=2.2.1
