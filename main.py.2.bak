@@ -1,0 +1,403 @@
+import subprocess
+from urllib.parse import urlparse
+
+import pyrogram
+from pyrogram import Client, filters
+from pyrogram.errors import UsernameNotOccupied
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import cv2
+from moviepy import VideoFileClip
+
+import time
+import os
+import threading
+import json
+
+with open('config.json', 'r') as f:
+    DATA = json.load(f)
+
+
+def getenv(var):
+    return os.environ.get(var) or DATA.get(var, None)
+
+
+api_id = int(getenv("ID"))
+api_hash = getenv("HASH")
+bot_token = getenv("TOKEN")
+allowed_users = getenv("ALLOWED_USERS").split(",")
+save_to_chat_id = int(getenv("SAVE_TO_CHAT_ID"))
+save_to_topic_id_document = int(getenv("SAVE_TO_TOPIC_ID_DOCUMENT"))
+save_to_topic_id_video = int(getenv("SAVE_TO_TOPIC_ID_VIDEO"))
+save_to_topic_id_photo = int(getenv("SAVE_TO_TOPIC_ID_PHOTO"))
+
+os.makedirs('./sessions', exist_ok=True)
+
+bot = Client('./sessions/bot', api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+
+# 用于记录每个消息的上传/下载进度时间与字节数
+last_update_time = {}
+last_update_bytes = {}
+
+
+def is_allowed_user(message: pyrogram.types.messages_and_media.message.Message):
+    if str(message.from_user.id) not in allowed_users:
+        bot.send_message(message.chat.id, "鉴权失败", reply_to_message_id=message.id)
+        return False
+
+    try:
+        bot.get_chat(save_to_chat_id)
+    except:
+        bot.send_message(message.chat.id, "请先将机器人加入指定群组或频道，并使用任意账号在该群组或频道发言一次。",
+                         reply_to_message_id=message.id)
+        return False
+
+    # if len(last_update_time) >= 4:
+    #     bot.send_message(message.chat.id, "请先等待其他任务执行完毕。", reply_to_message_id=message.id)
+    #     return False
+
+    return True
+
+
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['', 'K', 'M', 'G', 'T', 'P']:
+        if abs(num) < 1024.0:
+            return f"{num:.2f} {unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.2f} P{suffix}"
+
+
+# 下载状态函数
+def downstatus(statusfile, message):
+    while True:
+        if os.path.exists(statusfile):
+            break
+
+    time.sleep(3)
+    while os.path.exists(statusfile):
+        with open(statusfile, "r") as downread:
+            txt = downread.read()
+        try:
+            bot.edit_message_text(message.chat.id, message.id, f"__正在下载__ : **{txt}**")
+            time.sleep(3)
+        except:
+            time.sleep(5)
+
+
+# 上传状态
+def upstatus(statusfile, message):
+    while True:
+        if os.path.exists(statusfile):
+            break
+
+    time.sleep(3)
+    while os.path.exists(statusfile):
+        with open(statusfile, "r") as upread:
+            txt = upread.read()
+        try:
+            bot.edit_message_text(message.chat.id, message.id, f"__正在上传__ : **{txt}**")
+            time.sleep(3)
+        except:
+            time.sleep(5)
+
+
+# 进度写入函数
+def progress(current, total, message, type):
+    now = time.time()
+    key = f"{message.id}_{type}"
+
+    # 限制更新频率：每秒最多更新一次
+    if key in last_update_time and now - last_update_time[key] < 1:
+        return
+
+    if key in last_update_time:
+        elapsed = now - last_update_time[key]
+        diff = current - last_update_bytes[key]
+        speed = diff / elapsed if elapsed > 0 else 0
+        speed_str = sizeof_fmt(speed) + "/s"
+    else:
+        speed_str = "计算中..."
+
+    percent = current * 100 / total
+    status_text = f"{percent:.1f}% - {speed_str}"
+
+    with open(f'{message.id}{type}status.txt', "w") as fileup:
+        fileup.write(status_text)
+
+    last_update_time[key] = now
+    last_update_bytes[key] = current
+
+
+# 开始命令处理函数
+@bot.on_message(filters.command(["start"]))
+def send_start(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    if not is_allowed_user(message):
+        return
+
+    bot.send_message(message.chat.id,
+                     f"__👋 Hi **{message.from_user.mention}**, I am Save File Bot\n你可以发送文件或受限内容的链接让我保存__\n\n{USAGE}",
+                     reply_markup=InlineKeyboardMarkup(
+                         [[InlineKeyboardButton("🌐 源码仓库", url="https://github.com/feassh/Save-File-Bot")]]),
+                     reply_to_message_id=message.id)
+
+
+# 收到视频或图片执行
+@bot.on_message((filters.photo | filters.video | filters.document) & filters.private)
+def save_media(client, message):
+    if not is_allowed_user(message):
+        return
+    handle_private(message)
+
+
+# 收到“https://t.me/***”后执行
+@bot.on_message(filters.text & filters.private)
+def save(client: pyrogram.client.Client, message: pyrogram.types.messages_and_media.message.Message):
+    if not is_allowed_user(message):
+        return
+
+    text = message.text.strip()
+
+    # 收到消息
+    if text.startswith("https://t.me/"):
+        try:
+            datas = text.split("/")
+            msgid = int(datas[-1].replace("?single", "").split("-")[0])
+        except Exception as e:
+            bot.send_message(message.chat.id, f"**错误** : __{e}__", reply_to_message_id=message.id)
+            return
+
+        try:
+            if len(datas) < 4: return
+            # 私人的聊天
+            if text.startswith("https://t.me/c/"):
+                bot.send_message(message.chat.id, f"**错误** : 暂不支持私人聊天", reply_to_message_id=message.id)
+            # 机器人的聊天
+            elif text.startswith("https://t.me/b/"):
+                bot.send_message(message.chat.id, f"**错误** : 暂不支持机器人聊天", reply_to_message_id=message.id)
+            # 公开的聊天
+            else:
+                username = datas[3]
+
+                try:
+                    msg = bot.get_messages(username, msgid)
+                except UsernameNotOccupied:
+                    bot.send_message(message.chat.id, f"**不存在这个用户名**", reply_to_message_id=message.id)
+                    return
+
+                try:
+                    handle_private(message, msg=msg)
+                except Exception as e:
+                    bot.send_message(message.chat.id, f"**错误** : __{e}__", reply_to_message_id=message.id)
+        except Exception as e:
+            bot.send_message(message.chat.id, f"**错误** : __{e}__", reply_to_message_id=message.id)
+    elif text.startswith("magnet:?") or text.startswith("http://") or text.startswith("https://"):
+        smsg = bot.send_message(message.chat.id, "__开始下载__", reply_to_message_id=message.id)
+
+        try:
+            # Magnet download using aria2c
+            if text.startswith("magnet:?"):
+                filename = f"downloads/{int(time.time())}_magnet"
+                cmd = ["aria2c", text, "--dir=downloads", "--out=result", "--summary-interval=1"]
+            else:
+                # Direct HTTP/HTTPS download
+                parsed = urlparse(text)
+                filename = f"downloads/{os.path.basename(parsed.path) or str(int(time.time()))}"
+                cmd = ["aria2c", text, "--dir=downloads", f"--out={os.path.basename(filename)}", "--summary-interval=1"]
+
+            subprocess.run(cmd, check=True)
+
+            if os.path.exists(filename):
+                handle_file_upload(message, filename, smsg)
+            else:
+                bot.edit_message_text(message.chat.id, smsg.id, "下载失败，未找到文件")
+                # # 搜索下载目录下最新文件
+                # files = sorted(os.listdir("downloads"), key=lambda x: os.path.getmtime(os.path.join("downloads", x)),
+                #                reverse=True)
+                # if files:
+                #     latest = os.path.join("downloads", files[0])
+                #     handle_file_upload(message, latest, smsg)
+                # else:
+                #     bot.edit_message_text(message.chat.id, smsg.id, "下载失败，未找到文件")
+        except Exception as e:
+            bot.edit_message_text(message.chat.id, smsg.id, f"下载失败: {e}")
+    else:
+        return
+
+
+# 处理私人的聊天
+def handle_private(message: pyrogram.types.messages_and_media.message.Message, msg=None):
+    msg_user = message
+    if msg is not None:
+        msg_source = msg
+    else:
+        msg_source = message
+
+    msg_type = get_message_type(msg_source)
+
+    if "Other" == msg_type:
+        bot.send_message(msg_user.chat.id, f"**错误** : 暂不支持保存该类型的内容", entities=msg.entities,
+                         reply_to_message_id=msg_user.id)
+        return
+
+    smsg = bot.send_message(msg_user.chat.id, '__下载中__', reply_to_message_id=msg_user.id)
+    dosta = threading.Thread(target=lambda: downstatus(f'{msg_source.id}downstatus.txt', smsg), daemon=True)
+    dosta.start()
+    file = bot.download_media(msg_source, progress=progress, progress_args=[msg_source, "down"])
+    os.remove(f'{msg_source.id}downstatus.txt')
+
+    upsta = threading.Thread(target=lambda: upstatus(f'{msg_source.id}upstatus.txt', smsg), daemon=True)
+    upsta.start()
+
+    if "Video" == msg_type:
+        try:
+            thumb = bot.download_media(msg_source.video.thumbs[0].file_id)
+        except:
+            thumb = None
+
+        # 发送到指定聊天
+        bot.send_video(save_to_chat_id, file, duration=msg_source.video.duration, width=msg_source.video.width,
+                       height=msg_source.video.height, has_spoiler=True, thumb=thumb, progress=progress,
+                       progress_args=[msg_source, "up"],
+                       reply_to_message_id=save_to_topic_id_video)
+        if thumb is not None: os.remove(thumb)
+    elif "Photo" == msg_type:
+        # 发送到指定聊天
+        bot.send_photo(save_to_chat_id, file, has_spoiler=True,
+                       reply_to_message_id=save_to_topic_id_photo)
+    elif "Document" == msg_type:
+        try:
+            thumb = bot.download_media(msg_source.document.thumbs[0].file_id)
+        except:
+            thumb = None
+
+        # 发送到指定聊天
+        bot.send_document(save_to_chat_id, file, thumb=thumb,
+                          progress=progress,
+                          progress_args=[msg_source, "up"], reply_to_message_id=save_to_topic_id_document)
+        if thumb is not None: os.remove(thumb)
+
+    os.remove(file)
+    if os.path.exists(f'{msg_source.id}upstatus.txt'): os.remove(f'{msg_source.id}upstatus.txt')
+    # 删除用户发送的聊天
+    bot.delete_messages(msg_user.chat.id, [smsg.id])
+
+
+# 获取消息类型
+def get_message_type(msg: pyrogram.types.messages_and_media.message.Message):
+    try:
+        msg.video.file_id
+        return "Video"
+    except:
+        pass
+
+    try:
+        msg.photo.file_id
+        return "Photo"
+    except:
+        pass
+
+    try:
+        msg.document.file_id
+        return "Document"
+    except:
+        pass
+
+    return "Other"
+
+
+def handle_file_upload(message, file_path, status_msg):
+    file_size = os.path.getsize(file_path)
+    file_name = os.path.basename(file_path)
+    suffix = os.path.splitext(file_name)[1].lower()
+
+    upsta = threading.Thread(target=lambda: upstatus(f'{message.id}upstatus.txt', status_msg), daemon=True)
+    upsta.start()
+
+    try:
+        if suffix in ['.mp4', '.mkv', '.mov', 'flv', '.avi', '.wmv', '.webm', '.m4v']:
+            try:
+                # 获取视频信息
+                clip = VideoFileClip(file_path)
+                duration = int(clip.duration)
+                width, height = clip.size
+                clip.close()
+
+                # 生成缩略图
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+                thumb_path = f"{file_path}.jpg"
+                if ret:
+                    cv2.imwrite(thumb_path, frame)
+                cap.release()
+            except Exception as e:
+                duration, width, height, thumb_path = None, None, None, None
+
+            bot.send_video(
+                save_to_chat_id,
+                file_path,
+                duration=duration,
+                width=width,
+                height=height,
+                thumb=thumb_path if os.path.exists(thumb_path) else None,
+                progress=progress,
+                progress_args=[message, "up"],
+                reply_to_message_id=save_to_topic_id_video
+            )
+
+            if thumb_path and os.path.exists(thumb_path):
+                os.remove(thumb_path)
+        elif suffix in ['.jpg', '.jpeg', '.png', '.webp', 'gif']:
+            bot.send_photo(save_to_chat_id, file_path, reply_to_message_id=save_to_topic_id_photo)
+        else:
+            bot.send_document(
+                save_to_chat_id,
+                file_path,
+                progress=progress,
+                progress_args=[message, "up"],
+                reply_to_message_id=save_to_topic_id_document
+            )
+
+        bot.edit_message_text(message.chat.id, status_msg.id, f"✅ 已保存：`{file_name}` ({sizeof_fmt(file_size)})")
+    except Exception as e:
+        bot.edit_message_text(message.chat.id, status_msg.id, f"❌ 上传失败: {e}")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        if os.path.exists(f'{message.id}upstatus.txt'):
+            os.remove(f'{message.id}upstatus.txt')
+
+
+USAGE = """**对于公开聊天的文件**
+
+__只需发送相应链接__
+
+**对于非公开聊天的文件**
+
+__首先发送聊天的邀请链接 (如果当前提供会话的帐户已经是聊天成员，则不需要发送邀请链接)
+然后发送链接__
+
+**对于机器人聊天**
+
+__发送带有“/b/”的链接、机器人的用户名和消息 ID，你可能需要安装一些非官方客户端来获取如下所示的 ID__
+
+```
+https://t.me/b/botusername/4321
+```
+
+**如果你需要一次保存多个受限文件**
+
+__发送公共/私人帖子链接，如上所述，使用格式“发件人 - 收件人”发送多条消息，如下所示__
+
+```
+https://t.me/xxxx/1001-1010
+
+https://t.me/c/xxxx/101 - 120
+```
+
+__最好在中间加上空格__
+
+__⚠️注意：__首次将机器人拉入群组后，请先在群组发送任意一条消息，否则机器人会不识别 ChatID
+"""
+
+# 启动机器人（进入无限轮询）
+print("Bot is running...")
+bot.run()
