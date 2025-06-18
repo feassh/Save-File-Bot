@@ -1,10 +1,12 @@
 FROM python:3.13
 
-# 安装 aria2
+# 安装 aria2 和 OpenCV 所需依赖
 RUN apt-get update && \
-    apt-get install -y aria2 && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y \
+    aria2 \
+    libgl1 \
+    ffmpeg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录
 WORKDIR /app
